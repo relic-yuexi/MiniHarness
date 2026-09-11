@@ -90,7 +90,27 @@ Runtime 自行判断继续/结束，不使用关键词规则替代模型选择�
 
 `steer()` 等已发出的工具批次完整闭合后加入当前 Turn。`followup()` 在该 Turn 后处理。序号决定消息与通知顺序，不依赖时间戳。取消不等于撤销已发生的副作用；文件 worker 先收敛再允许后续任务，避免取消后仍有旧写入。
 
-Hook 通过 `Hooks.add(scope, pre=..., post=..., guard=True)` 注册，scope 为 session/user/turn/step/assistant/action/compact；对应 preSessionHook、postSessionHook 等语义。pre 按注册顺序，post 逆序；guard 可拒绝，observer/post 错误只记录。默认 5 秒超时。旧消息只读，Hook 不能绕开日志修改历史。
+每个 Hook 位置维护命名中间件队列，通过 `hooks.register(name, callback, position=..., priority=0)` 注册异步回调。优先级数值越大越先执行，同级按注册顺序；名称在同一注册表内唯一，同名覆盖并保留原排序序号，也可以改变位置。自定义同名 Hook 覆盖内置实现，与注册先后无关。位置兼容 `preActionHook`、`pre_action_hook`、`pre_action` 写法。
+
+`pre_system_prompt` / `post_system_prompt` 是可变的构建管线，接收 `{"system": ..., "tools": [...]}`；回调可修改副本或返回 dict 补丁。内置 `tool_schema` 在 `post_system_prompt` 注入工具 Schema，可同名替换。Schema 仍通过 Provider 原生 tools 字段发送，不重复拼进 system 文本；工具名称必须已有注册的执行器，替换 Schema 不会替换执行器及其参数校验。
+
+```python
+from miniharness.hooks import Hooks
+
+hooks = Hooks()
+
+
+async def add_policy(context):
+    context["system"] += "\n修改文件后说明验证结果。"
+
+
+hooks.register("project_policy", add_policy, position="pre_system_prompt", priority=10)
+# 将 hooks 传给 Runtime(..., hooks=hooks)。
+```
+
+每个 Session 复制注册表，在启动时执行构建管线，再冻结这两个位置。有效 system/tools 共同参与恢复指纹、请求与 token 预算；中途不能修改当前 Session 的缓存前缀。compact 请求仍禁用工具。执行队列使用快照，运行中注册只影响下一次派发。构建回调失败时丢弃其修改，guard 失败终止构建；observer 错误记录后继续。生命周期位置（session/user/turn/step/assistant/action/compact）的历史数据只读，不能绕开日志修改状态。默认回调超时 5 秒。
+
+兼容接口 `Hooks.add(scope, pre=..., post=..., guard=True)` 保留成对 pre 顺序进入、post 逆序退出的语义；新接口的 pre/post 均按优先级/FIFO。post 错误记录但不撤销已持久化操作；Hook 对外部资源的副作用不能自动回滚。
 
 ### 持久化与一致性
 

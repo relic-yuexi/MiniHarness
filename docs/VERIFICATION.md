@@ -2,7 +2,7 @@
 
 最后本地验证：2026-09-12，Windows，uv 0.8.9，Python 3.12.9。
 
-- 离线测试：146 项通过；真实 API 测试 3 项明确跳过（无凭据）。
+- 离线测试：166 项通过；真实 API 测试 3 项明确跳过（无凭据）。
 - Ruff 检查与格式检查通过。
 - `uv build` 生成 wheel/sdist；隔离环境导入 wheel 并读取完整 compact prompt 成功。
 - CLI `--version` / `--help` 正常。
@@ -21,6 +21,7 @@
 | 主循环、追问、独立session、恢复、限额、steer/followup、compact | test_runtime.py |
 | Hook持久化时机、启动/关闭竞态、compact期间输入、后台任务接受 | test_runtime_edges.py |
 | Hook顺序与拒绝、完整工具配对、token估算 | test_hooks_context.py |
+| 命名队列、覆盖/冻结/回滚、有效前缀恢复、Schema执行校验 | test_middleware_pipeline.py |
 | 真HTTP、工具追问、todo重启、真实摘要 | test_live.py（显式opt-in） |
 
 离线测试验证机制，真实模型是否按要求选择工具和压缩保真仍需 live 验收。测试不能证明面对任意输入都不会失败，也不能代替操作系统提供的持久性与进程边界。

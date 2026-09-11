@@ -11,14 +11,17 @@ from copy import deepcopy
 from dataclasses import dataclass
 from importlib.resources import files
 
+from jsonschema import Draft202012Validator
+
 from .config import Config
 from .context import canonical, estimate_tokens, fingerprint, validate_pairing
 from .hooks import Hooks
 from .models import Completion, new_id
+from .prompt import build_prefix
 from .providers import HTTPProvider
 from .state import replay
 from .storage import SessionStore
-from .tools import ToolContext, builtin_registry, run_bash_job
+from .tools import ToolContext, builtin_registry, run_bash_job, strict_json
 
 
 class RuntimeErrorBase(RuntimeError):
@@ -70,7 +73,8 @@ class Runtime:
         self.state = None
         self.on_event = on_event
         self.hooks = hooks or Hooks(config.hook_timeout)
-        self.hooks.on_error = self._hook_error
+        self._hook_blueprint = self.hooks
+        self._prefix: dict | None = None
         self._tickets: dict[str, Ticket] = {}
         self._worker: asyncio.Task | None = None
         self._active: asyncio.Task | None = None
@@ -104,8 +108,15 @@ class Runtime:
         self.store.open()
         try:
             self.state = replay(self.store.events)
+            # Per-session middleware snapshots keep a reusable Hooks blueprint
+            # independent of other owners and their diagnostic callbacks.
+            self.hooks = self._hook_blueprint.copy(on_error=self._hook_error)
+            prefix = await build_prefix(self.hooks, self.config.system, self.registry)
             config_hash = fingerprint(
-                {"config": self.config.fingerprint_data(), "tools": self.registry.specs()}
+                {
+                    "config": self.config.fingerprint_data() | {"system": prefix["system"]},
+                    "tools": prefix["tools"],
+                }
             )
             if self.state.config_hash and self.state.config_hash != config_hash:
                 raise ValueError(
@@ -113,6 +124,7 @@ class Runtime:
                 )
             if not self.state.config_hash:
                 self._record("runtime.configured", {"hash": config_hash})
+            self._prefix = prefix
             self.config.workspace.mkdir(parents=True, exist_ok=True)
             self._session_scope = self.hooks.scope("session", {"session_id": self.session_id})
             await self._session_scope.__aenter__()
@@ -122,8 +134,22 @@ class Runtime:
             self._ensure_worker()
             return self
         except BaseException:
+            self.hooks = self._hook_blueprint
+            self._prefix = None
             self.store.close()
             raise
+
+    @property
+    def system_prompt(self) -> str:
+        if self._prefix is None:
+            raise RuntimeErrorBase("Start the runtime before reading its built prompt")
+        return self._prefix["system"]
+
+    @property
+    def tool_schemas(self) -> list[dict]:
+        if self._prefix is None:
+            raise RuntimeErrorBase("Start the runtime before reading its built tools")
+        return deepcopy(self._prefix["tools"])
 
     def _check(self):
         if self._closed or self._poisoned:
@@ -145,6 +171,8 @@ class Runtime:
 
     async def _hook_error(self, data: dict):
         self._record("hook.failed", data, turn_id=self.state.current_turn, step_id=self._step_id)
+        if self._hook_blueprint.on_error:
+            await self._hook_blueprint.on_error(deepcopy(data))
 
     async def _emit(self, data: dict):
         if self.on_event:
@@ -479,8 +507,8 @@ class Runtime:
             raise BudgetExceeded("Session token budget reached")
         messages = self._project() if messages is None else self._project(messages)
         validate_pairing(messages)
-        tools = self.registry.specs() if tools is None else tools
-        system = self.config.system if system is None else system
+        tools = self.tool_schemas if tools is None else deepcopy(tools)
+        system = self.system_prompt if system is None else system
         attempt_id = new_id()
         self._record(
             "assistant.started",
@@ -590,6 +618,19 @@ class Runtime:
             protected_root=self.config.session_root.resolve(),
         )
 
+    def _offered_call_error(self, call):
+        spec = next((tool for tool in self.tool_schemas if tool["name"] == call["name"]), None)
+        if spec is None:
+            return error_result("UNKNOWN_TOOL", "Tool was not offered in this session's schema")
+        try:
+            arguments = strict_json(call["arguments"])
+            error = next(Draft202012Validator(spec["parameters"]).iter_errors(arguments), None)
+            if error is not None:
+                return error_result("INVALID_ARGUMENT", error.message)
+        except (ValueError, TypeError, RecursionError) as exc:
+            return error_result("INVALID_ARGUMENT", str(exc))
+        return None
+
     async def _execute_batch(self, calls):
         results = []
         # Serial by default: deterministic state tools and file mutations. Async
@@ -630,6 +671,8 @@ class Runtime:
                         "CANCELLED" if self._cancel else "ACTION_LIMIT", "Action was not started"
                     )
                 )
+            elif schema_error := self._offered_call_error(call):
+                result = commit(schema_error)
             else:
                 try:
                     async with self.hooks.scope("action", {"action_id": action_id, "call": call}):
@@ -754,8 +797,8 @@ class Runtime:
             raise BudgetExceeded("Session token budget reached")
         tokens = estimate_tokens(
             {
-                "system": self.config.system,
-                "tools": self.registry.specs(),
+                "system": self.system_prompt,
+                "tools": self.tool_schemas,
                 "messages": self._project(),
             }
         )
@@ -770,8 +813,8 @@ class Runtime:
             await self._compact_now()
             tokens = estimate_tokens(
                 {
-                    "system": self.config.system,
-                    "tools": self.registry.specs(),
+                    "system": self.system_prompt,
+                    "tools": self.tool_schemas,
                     "messages": self._project(),
                 }
             )
@@ -811,8 +854,8 @@ class Runtime:
         prefix, suffix = snapshot[:split], snapshot[split:]
         retained_cost = estimate_tokens(
             {
-                "system": self.config.system,
-                "tools": self.registry.specs(),
+                "system": self.system_prompt,
+                "tools": self.tool_schemas,
                 "messages": self._project(suffix),
             }
         )

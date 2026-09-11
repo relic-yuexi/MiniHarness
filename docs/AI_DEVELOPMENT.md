@@ -47,3 +47,11 @@
 离线 FakeProvider 只测试 Runtime 行为，HTTP mock 只测试协议适配，均不宣称真实模型质量。真实 API 测试必须显式配置凭据并开启。没有密钥时记录 skipped，不编造 request ID 或成功截图。最终验证和限制见 [VERIFICATION.md](VERIFICATION.md)。
 
 源码与 Git commit 是修改的可审计证据；每次提交正文解释修改内容、原因与当时实际执行的验证。敏感 session 日志和本机配置不公开上传。
+
+## 命名中间件队列迭代（2026-09-12）
+
+用户要求每个阶段维护可排序的 Hook 队列，支持名称、位置、级别与同名覆盖，并解耦系统提示词和工具 Schema 构建。实现 `Hooks.register`，优先级降序、同级 FIFO、同名保留序号；旧成对接口仍逆序退出。
+
+构建上下文独立保存 system/tools，内置 tool_schema Hook 只注入结构化 tools，不将其拼进 system 文本。Provider 保持原生协议转换。Session 启动时复制队列、事务式构建并冻结请求前缀；有效前缀用于恢复指纹、预算及请求，维护 cache 优先原则。回调失败不泄漏部分内存修改；这不代表回调的外部副作用可回滚。
+
+专项测试覆盖覆盖顺序、别名、快照、冻结、超时/取消、失败回滚、旧接口退出顺序、会话恢复与 compact 禁用工具。复审发现旧接口 post-only 层在 guard 失败后可能被错误进入，以及自定义工具参数 Schema 需要执行前校验，均补针对性回归。
