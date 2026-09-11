@@ -10,7 +10,9 @@ def test_config_relative_paths(tmp_path):
     assert load_config(path).workspace == tmp_path / "work"
 
 
-@pytest.mark.parametrize("values", [{"context_window": 100}, {"max_output_tokens": 0}, {"model": ""}])
+@pytest.mark.parametrize(
+    "values", [{"context_window": 100}, {"max_output_tokens": 0}, {"model": ""}]
+)
 def test_invalid_budget(values):
     config = Config(provider=ProviderConfig(**({"model": "test"} | values)))
     with pytest.raises(ValueError):
