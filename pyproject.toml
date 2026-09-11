@@ -1,0 +1,37 @@
+[project]
+name = "miniharness"
+version = "0.1.0"
+description = "A small, framework-free, persistent Python agent runtime"
+readme = "README.md"
+authors = [
+    { name = "moontidef", email = "53668275+relic-yuexi@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "filelock>=3.32.6",
+    "httpx>=0.28.1",
+    "jsonschema>=4.26.0",
+]
+
+[project.scripts]
+miniharness = "miniharness.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.9,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.7",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["live: requires real LLM credentials and explicit opt-in"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100

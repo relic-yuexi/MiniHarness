@@ -1,0 +1,28 @@
+# Copy to config.toml (gitignored). Never put an API key here.
+[provider]
+protocol = "openai_chat" # openai_responses | anthropic_messages
+base_url = "https://api.openai.com/v1"
+model = "YOUR_MODEL"
+api_key_env = "OPENAI_API_KEY"
+# Set these limits from your actual model's documentation.
+context_window = 32768
+max_output_tokens = 4096
+timeout = 60.0
+max_retries = 2
+strict_schema = false
+
+[runtime]
+session_root = ".miniharness/sessions"
+workspace = ".miniharness/workspace"
+stream = true
+max_steps_per_turn = 16
+max_actions_per_step = 8
+turn_timeout = 300.0
+queue_capacity = 128
+compact_target_tokens = 8192
+compact_prompt_reserve = 2048
+compact_reasoning_reserve = 0
+context_safety_ratio = 0.8
+keep_recent_turns = 2
+# Windows example; omit on systems with bash on PATH.
+# bash_executable = "C:/Program Files/Git/bin/bash.exe"
