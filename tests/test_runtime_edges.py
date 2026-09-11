@@ -1,6 +1,7 @@
 """Regression cases discovered during independent runtime boundary review."""
 
 import asyncio
+import json
 
 import pytest
 from test_runtime import FakeProvider
@@ -10,6 +11,29 @@ from miniharness.hooks import Hooks
 from miniharness.models import Completion, ProviderConfig, ToolCall
 from miniharness.runtime import Runtime
 from miniharness.tools import ToolRegistry, result
+
+
+@pytest.mark.asyncio
+async def test_compact_summarizes_readable_history_not_opaque_reasoning(config):
+    fake = FakeProvider(
+        Completion(
+            text="Visible fact: 42",
+            provider_payload={"encrypted": "OPAQUE_SECRET"},
+            reasoning="PRIVATE_REASONING",
+        ),
+        Completion(text="[用户任务]\nRemember 42\n[工作状态]\nFact is 42"),
+    )
+    async with Runtime(config, provider=fake) as runtime:
+        await runtime.ask("Remember the result")
+        before = json.dumps(runtime.store.events)
+        assert "OPAQUE_SECRET" in before
+        result = await runtime.compact()
+        assert result["status"] == "completed"
+        summary_input = json.dumps(fake.calls[-1]["messages"])
+        assert "Visible fact: 42" in summary_input
+        assert "OPAQUE_SECRET" not in summary_input
+        assert "PRIVATE_REASONING" not in summary_input
+        assert "OPAQUE_SECRET" in json.dumps(runtime.store.events)
 
 
 @pytest.fixture
