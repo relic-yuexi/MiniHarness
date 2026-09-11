@@ -7,7 +7,7 @@
 - `uv build` 生成 wheel/sdist；隔离环境导入 wheel 并读取完整 compact prompt 成功。
 - CLI `--version` / `--help` 正常。
 
-远端 CI 状态以 GitHub Actions 的实际运行结果为准。
+远端 [Linux / Windows CI](https://github.com/relic-yuexi/MiniHarness/actions/runs/34631027807) 已全部通过（提交 `0b09fe3`）。后续最新状态可在仓库 Actions 查看。
 
 ## 覆盖范围
 
@@ -28,7 +28,7 @@
 ## 明确限制
 
 - 当前执行环境未提供 LLM API key，因此没有真实 API 成功记录；3 项 live 测试默认明确跳过。默认运行路径只有真实 HTTPProvider，没有关键词路由或伪造模型。
-- 本地执行与测试为 Windows；Linux/Windows CI 配置已提供，远端是否通过需查看实际 Actions 结果。
+- 本地执行与测试为 Windows；远端 Linux/Windows 离线 CI 已通过。
 - search 明确 mock；没有内置跨session向量RAG、定时复盘调度器、plan或/goal命令。
 - 原生 `async: true` 工具调用属于扩展；当前跨Provider方案使用Job handle和独立完成事件。
 - 同一session单进程owner；多session可并发。普通工具批次串行执行，后台Job并发。没有分布式worker或跨机器一致性协议。
