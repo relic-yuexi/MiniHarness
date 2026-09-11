@@ -1,10 +1,10 @@
 """Bounded, ordered lifecycle middleware with explicit guard/observer semantics."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Awaitable, Callable
-import asyncio
 
 Callback = Callable[[dict], Awaitable[None]]
 
@@ -22,8 +22,14 @@ class Hooks:
         self.on_error = on_error
         self.layers: dict[str, list[Layer]] = {}
 
-    def add(self, scope: str, *, pre: Callback | None = None, post: Callback | None = None,
-            guard: bool = True) -> None:
+    def add(
+        self,
+        scope: str,
+        *,
+        pre: Callback | None = None,
+        post: Callback | None = None,
+        guard: bool = True,
+    ) -> None:
         """Scopes: session, user, turn, step, assistant, action, compact."""
         if scope not in {"session", "user", "turn", "step", "assistant", "action", "compact"}:
             raise ValueError(f"Unknown hook scope: {scope}")
@@ -36,7 +42,9 @@ class Hooks:
     async def _diagnostic(self, scope: str, error: Exception) -> None:
         if self.on_error:
             # Do not recursively catch a failed diagnostic write.
-            await self.on_error({"scope": scope, "error": type(error).__name__, "message": str(error)})
+            await self.on_error(
+                {"scope": scope, "error": type(error).__name__, "message": str(error)}
+            )
 
     @asynccontextmanager
     async def scope(self, name: str, data: dict):

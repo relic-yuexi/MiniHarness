@@ -1,8 +1,8 @@
 """Portable TOML configuration; API secrets remain in the environment."""
 
+import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-import tomllib
 
 from .models import ProviderConfig
 
@@ -41,8 +41,15 @@ class Config:
         if self.provider.protocol not in {"openai_chat", "openai_responses", "anthropic_messages"}:
             raise ValueError("Unknown provider protocol")
         if not self.provider.model:
-            raise ValueError("Set provider.model in config.toml to a model available to your account")
-        for key in ("max_steps_per_turn", "max_actions_per_step", "queue_capacity", "max_input_bytes"):
+            raise ValueError(
+                "Set provider.model in config.toml to a model available to your account"
+            )
+        for key in (
+            "max_steps_per_turn",
+            "max_actions_per_step",
+            "queue_capacity",
+            "max_input_bytes",
+        ):
             if getattr(self, key) <= 0:
                 raise ValueError(f"{key} must be positive")
         if not 0 < self.context_safety_ratio < 1:
@@ -55,12 +62,21 @@ class Config:
             raise ValueError("Retries and retained turns cannot be negative")
         if self.compact_target_tokens <= 0 or self.compact_reasoning_reserve < 0:
             raise ValueError("Invalid compact output budget")
-        reserve = max(2048, self.compact_prompt_reserve) + self.compact_target_tokens + self.compact_reasoning_reserve
-        if max(reserve, self.provider.max_output_tokens) >= self.provider.context_window * self.context_safety_ratio:
+        reserve = (
+            max(2048, self.compact_prompt_reserve)
+            + self.compact_target_tokens
+            + self.compact_reasoning_reserve
+        )
+        if (
+            max(reserve, self.provider.max_output_tokens)
+            >= self.provider.context_window * self.context_safety_ratio
+        ):
             raise ValueError("Context window too small for configured output/compact reserves")
 
     def fingerprint_data(self) -> dict:
         data = asdict(self)
+        # Streaming changes transport/display, never the model's message prefix.
+        data.pop("stream")
         data["session_root"] = str(self.session_root.resolve())
         data["workspace"] = str(self.workspace.resolve())
         return data
@@ -69,7 +85,9 @@ class Config:
 def load_config(path: str | Path = "config.toml") -> Config:
     path = Path(path)
     if not path.exists():
-        raise ValueError(f"Configuration not found: {path}. Copy config.example.toml to config.toml.")
+        raise ValueError(
+            f"Configuration not found: {path}. Copy config.example.toml to config.toml."
+        )
     with path.open("rb") as handle:
         raw = tomllib.load(handle)
     provider = ProviderConfig(**raw.pop("provider", {}))

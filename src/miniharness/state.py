@@ -25,6 +25,7 @@ class State:
         if kind == "runtime.configured":
             self.config_hash = p["hash"]
         elif kind == "input.enqueued":
+            p["enqueue_seq"] = event["seq"]
             request_id = p["request_id"]
             self.queue[request_id] = p
             self.requests[request_id] = p | {"status": "queued"}
@@ -34,10 +35,10 @@ class State:
             self.requests[request_id]["status"] = "accepted"
             self.turn_requests.append(request_id)
             self.messages.append(p["message"])
-        elif kind == "input.rejected":
+        elif kind in {"input.rejected", "input.finished"}:
             request_id = p["request_id"]
             self.queue.pop(request_id, None)
-            self.requests[request_id].update(status="failed", result=p["result"])
+            self.requests[request_id].update(status=p["result"]["status"], result=p["result"])
         elif kind == "turn.started":
             self.current_turn = event["turn_id"]
             self.turn_requests = []
@@ -49,7 +50,11 @@ class State:
         elif kind == "assistant.committed":
             self.messages.append(p["message"])
         elif kind == "action.started":
-            self.actions[event["action_id"]] = p | {"status": "started", "turn_id": event["turn_id"], "step_id": event["step_id"]}
+            self.actions[event["action_id"]] = p | {
+                "status": "started",
+                "turn_id": event["turn_id"],
+                "step_id": event["step_id"],
+            }
         elif kind == "action.completed":
             action_id = event["action_id"]
             previous = self.actions.get(action_id, {})
@@ -71,7 +76,7 @@ class State:
             self.epoch = p["epoch"]
         elif kind == "job.completed":
             self.jobs[p["job_id"]].update(status=p["status"], result=p["result"])
-            self.notifications[p["job_id"]] = p
+            self.notifications[p["job_id"]] = p | {"enqueue_seq": event["seq"]}
         elif kind == "notification.delivered":
             self.notifications.pop(p["job_id"], None)
         elif kind == "notification.accepted":
@@ -80,7 +85,10 @@ class State:
 
     @property
     def total_tokens(self) -> int:
-        return sum((u.get("input_tokens_total") or 0) + (u.get("output_tokens") or 0) for u in self.usage.values())
+        return sum(
+            (u.get("input_tokens_total") or 0) + (u.get("output_tokens") or 0)
+            for u in self.usage.values()
+        )
 
 
 def replay(events: list[dict]) -> State:
