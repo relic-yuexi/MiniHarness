@@ -8,6 +8,7 @@ import codecs
 import copy
 import hashlib
 import json
+import logging
 import math
 import operator
 import os
@@ -27,6 +28,7 @@ from jsonschema import Draft202012Validator
 PREVIEW_LIMIT = 32768
 FILE_LIMIT = 16 * 1024 * 1024
 OUTPUT_LIMIT = 8 * 1024 * 1024
+CLEANUP_TIMEOUT = 2.0
 
 
 @dataclass
@@ -134,6 +136,7 @@ def atomic_write(path, raw, *, create_only=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".miniharness-", dir=path.parent)
     temp = Path(name)
+    published = False
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(raw)
@@ -145,8 +148,16 @@ def atomic_write(path, raw, *, create_only=False):
             os.link(temp, path)  # atomic no-clobber publication
         else:
             os.replace(temp, path)
+        published = True
     finally:
-        temp.unlink(missing_ok=True)
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            if not published:
+                raise
+            logging.getLogger(__name__).warning(
+                "Published file; temporary-file cleanup failed: %s", temp
+            )
 
 
 def snapshot(path):
@@ -462,20 +473,21 @@ async def run_bash_job(descriptor: dict, context: ToolContext) -> dict:
     except OSError as exc:
         return failure("IO_ERROR", str(exc))
 
-    async def drain(stream):
-        content = bytearray()
-        dropped = 0
+    buffers = [bytearray(), bytearray()]
+    dropped_counts = [0, 0]
+
+    async def drain(stream, index):
         while chunk := await stream.read(65536):
-            remaining = OUTPUT_LIMIT - len(content)
-            content.extend(chunk[:remaining])
-            dropped += max(0, len(chunk) - remaining)
-        return bytes(content), dropped
+            remaining = OUTPUT_LIMIT - len(buffers[index])
+            buffers[index].extend(chunk[:remaining])
+            dropped_counts[index] += max(0, len(chunk) - remaining)
 
     streams = [
-        asyncio.create_task(drain(process.stdout)),
-        asyncio.create_task(drain(process.stderr)),
+        asyncio.create_task(drain(process.stdout, 0)),
+        asyncio.create_task(drain(process.stderr, 1)),
     ]
     timed_out = False
+    cleanup_incomplete = False
 
     async def terminate():
         if os.name == "nt":
@@ -488,37 +500,58 @@ async def run_bash_job(descriptor: dict, context: ToolContext) -> dict:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await killer.wait()
+            try:
+                await killer.wait()
+            finally:
+                if killer.returncode is None:
+                    try:
+                        killer.kill()
+                    except ProcessLookupError:
+                        pass
         else:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
         if process.returncode is None:
-            process.kill()
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
         await process.wait()
+
+    async def cleanup():
+        nonlocal cleanup_incomplete
+        try:
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
+                await terminate()
+                await asyncio.gather(*streams)
+        except (TimeoutError, OSError):
+            cleanup_incomplete = True
+        finally:
+            for task in streams:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*streams, return_exceptions=True)
 
     try:
         async with asyncio.timeout(descriptor["timeout_seconds"]):
             await process.wait()
-            await asyncio.gather(*streams)
+            # wait() does not cancel drain tasks when the caller deadline expires.
+            await asyncio.wait(streams)
+            for task in streams:
+                task.result()
     except TimeoutError:
         timed_out = True
-        await terminate()
+        await _settle_task(asyncio.create_task(cleanup()))
     except asyncio.CancelledError:
-        await terminate()
-        for stream in streams:
-            stream.cancel()
-        await asyncio.gather(*streams, return_exceptions=True)
+        await _settle_task(asyncio.create_task(cleanup()))
         raise
     outputs = []
     refs = []
     dropped_total = 0
-    for index, stream in enumerate(streams):
-        if stream.cancelled():
-            outputs.append("[output unavailable after timeout]")
-            continue
-        raw, dropped = await stream
+    for index in range(len(streams)):
+        raw, dropped = bytes(buffers[index]), dropped_counts[index]
         dropped_total += dropped
         # Shell output may use arbitrary encodings; normalize artifact to UTF-8.
         normalized = raw.decode("utf-8", errors="replace").encode("utf-8")
@@ -527,6 +560,8 @@ async def run_bash_job(descriptor: dict, context: ToolContext) -> dict:
     data = {
         "exit_code": process.returncode,
         "timed_out": timed_out,
+        "cleanup_incomplete": cleanup_incomplete,
+        "output_partial": timed_out or cleanup_incomplete,
         "stdout": outputs[0],
         "stderr": outputs[1],
         "dropped_bytes": dropped_total,
@@ -552,6 +587,23 @@ async def run_bash_job(descriptor: dict, context: ToolContext) -> dict:
         effect="unknown" if timed_out or process.returncode else "applied",
         error=error,
     )
+
+
+async def _settle_task(task):
+    """Cancellation cannot release ownership while a synchronous worker still runs."""
+    cancelled = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except BaseException:
+            break
+    if cancelled is not None:
+        if not task.cancelled():
+            task.exception()  # Retrieve worker failure; cancellation remains authoritative.
+        raise cancelled
+    return task.result()
 
 
 def strict_json(value):
@@ -610,7 +662,9 @@ class ToolRegistry:
         try:
             if asyncio.iscoroutinefunction(handler):
                 return await handler(args, context)
-            return await asyncio.to_thread(handler, args, context)
+            return await _settle_task(
+                asyncio.create_task(asyncio.to_thread(handler, args, context))
+            )
         except ToolError as exc:
             return failure(exc.code, str(exc))
         except FileNotFoundError as exc:
