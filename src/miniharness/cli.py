@@ -11,6 +11,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
+
 from . import __version__
 from .config import Config, load_config
 from .runtime import Runtime
@@ -51,7 +54,13 @@ class Console:
     def __init__(self, stream=True):
         self.stream = stream
         self.partial = ""
+        self.line_open = False
         self.printed_turns = set()
+
+    def end_line(self):
+        if self.line_open:
+            print(flush=True)
+            self.line_open = False
 
     def complete(self, result):
         turn_id = result.get("turn_id")
@@ -60,10 +69,9 @@ class Console:
         if turn_id:
             self.printed_turns.add(turn_id)
         text = result.get("text", "")
-        if self.partial:
-            print(flush=True)
+        self.end_line()
         if text and not (self.partial and self.partial.endswith(text)):
-            print(text, flush=True)
+            print(f"Assistant: {text}", flush=True)
         if result.get("status") != "completed":
             print(f"[{result.get('status', 'unknown')}]", file=sys.stderr, flush=True)
         self.partial = ""
@@ -73,11 +81,15 @@ class Console:
         if kind in {"provider_delta", "delta"} and self.stream:
             text = visible_delta(data)
             if text:
+                if not self.line_open:
+                    print("Assistant: ", end="", flush=True)
+                    self.line_open = True
                 self.partial += text
                 print(text, end="", flush=True)
         elif kind == "turn.ended":
             self.complete(data)
         elif kind == "action.completed":
+            self.end_line()
             result = data.get("result", {})
             print(
                 f"[tool {data.get('name')}: {'ok' if result.get('ok') else 'failed'}; effect={result.get('effect_status', 'none')}]",
@@ -85,6 +97,7 @@ class Console:
                 flush=True,
             )
         elif kind == "job.completed":
+            self.end_line()
             print(f"\n[job {data.get('job_id')}: {data.get('status')}]", flush=True)
             print(data.get("result", {}).get("preview_content", ""), flush=True)
 
@@ -137,6 +150,15 @@ async def run_once(config, args):
 
 
 async def chat(config, args):
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        prompt = PromptSession()
+        # Redraw the editable input when asynchronous model/tool output arrives.
+        with patch_stdout():
+            return await _chat(config, args, prompt)
+    return await _chat(config, args)
+
+
+async def _chat(config, args, prompt=None):
     console = Console(config.stream)
     watchers = set()
     async with Runtime(
@@ -152,7 +174,11 @@ async def chat(config, args):
 
         while True:
             try:
-                line = (await asyncio.to_thread(input, "> ")).strip()
+                line = (
+                    await prompt.prompt_async("You > ")
+                    if prompt is not None
+                    else await asyncio.to_thread(input, "You > ")
+                ).strip()
             except EOFError:
                 break
             if not line:
