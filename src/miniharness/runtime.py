@@ -22,6 +22,7 @@ from .providers import HTTPProvider
 from .state import replay
 from .storage import SessionStore
 from .tools import ToolContext, builtin_registry, run_bash_job, strict_json
+from .trace import stream_trace
 
 
 class RuntimeErrorBase(RuntimeError):
@@ -529,8 +530,9 @@ class Runtime:
 
         async def delta(event):
             nonlocal delta_size
-            delta_buffer.append(event)
-            delta_size += len(canonical(event).encode("utf-8"))
+            trace = stream_trace(event)
+            delta_buffer.append(trace)
+            delta_size += len(canonical(trace).encode("utf-8"))
             if delta_size >= 4096:
                 self._record(
                     "assistant.delta", {"attempt_id": attempt_id, "deltas": delta_buffer.copy()}

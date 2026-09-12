@@ -59,3 +59,11 @@
 ## CLI 角色显示（2026-09-12）
 
 用户反馈输入提示符与助手回复混在一起。改用 You > 输入提示和 Assistant: 回复标签，流式输出遇到工具日志先结束当前行。交互终端通过 prompt-toolkit 重绘输入行，保留 busy 时继续输入的能力；重定向输入保留普通输入路径。验证：16 项 CLI 测试通过，Ruff 检查和格式检查通过。未执行真实终端人工验收。
+
+## 流式审计日志去冗余（2026-09-12）
+
+用户发现 Responses 流事件反复保存 instructions/tools/output。新增只作用于落盘 trace 的投影：生命周期 response 保留 id/status/model/error/incomplete_details/usage；done 事件去掉重复正文与参数，保留 item/call 标识。原始事件的 hash 与字节数标记投影来源，但不能据此还原原始响应。未知事件与其他协议继续保留原事件。
+
+Provider 解析、UI 事件、已提交消息、opaque blocks 和用量统计不变，旧 JSONL 不改写。保留文本/参数 delta，终态完整内容由 committed 事件负责；中断前若有完整终态快照但尚未提交，精简 trace 不保证重建该快照，恢复仍按既有 unknown/aborted 规则处理。
+
+验证：169 项测试通过、3 项 live 跳过；Ruff 检查通过。用户提供的日志只读投影对比中，流事件内容由 104764 bytes 降为 42238 bytes（减少 59.7%，不含外层日志元数据与批次变化）。

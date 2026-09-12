@@ -2,7 +2,7 @@
 
 最后本地验证：2026-09-12，Windows，uv 0.8.9，Python 3.12.9。
 
-- 离线测试：166 项通过；真实 API 测试 3 项明确跳过（无凭据）。
+- 离线测试：169 项通过；真实 API 测试 3 项明确跳过（无凭据）。
 - Ruff 检查与格式检查通过。
 - `uv build` 生成 wheel/sdist；隔离环境导入 wheel 并读取完整 compact prompt 成功。
 - CLI `--version` / `--help` 正常。
@@ -50,3 +50,4 @@ uv build
 ```
 
 测试使用临时workspace，Bash测试只执行受控本地命令；live测试另建隔离session，不访问用户原有记录。参见README的真实API opt-in命令。
+
